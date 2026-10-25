@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import queue
 import signal
+import subprocess
 import threading
 import time
 from typing import Callable, List, Optional, Tuple
@@ -25,6 +26,14 @@ SCREEN_WIFI = "wifi"
 SCREEN_PASSWORD = "password"
 SCREEN_RADIO = "radio"
 SCREEN_BLUETOOTH = "bluetooth"
+
+# The board ships /usr/sbin/brightness, a shell helper that writes duty_cycle
+# on PWM pwmchip1/pwm0.  That is the only backlight control on the M10: there
+# is no /sys/class/backlight, fb_blank returns EINVAL and Xorg runs with
+# -dpms, so all of those routes are dead ends.
+BACKLIGHT_BIN = "/usr/sbin/brightness"
+BACKLIGHT_OFF = 0
+BACKLIGHT_ON = 100
 
 
 @dataclass(frozen=True)
@@ -223,12 +232,12 @@ class RadioApp:
             self._render_bluetooth()
 
     def _render_screen_off(self) -> None:
-        """Paint the panel black while playback continues.
+        """Blank the panel while playback continues.
 
-        The M10 exposes no way to switch the LCD backlight off from user space
-        (no /sys/class/backlight, fb_blank returns EINVAL, Xorg runs with
-        -dpms), so this blanks the picture rather than the panel.  The whole
-        area stays tappable so a touch also brings the display back.
+        The picture is painted black and the backlight is driven to 0 through
+        the board's own ``brightness`` helper, so the panel is genuinely dark
+        rather than just showing nothing.  The whole area stays tappable so a
+        touch brings the display back.
         """
 
         self.gui.fill_round_rect(
@@ -236,8 +245,30 @@ class RadioApp:
             onclick=self._toggle_screen_off,
         )
 
+    def _set_backlight(self, level: int) -> None:
+        """Drive the LCD backlight, ignoring boards without the helper.
+
+        Swallowing failures on purpose: if /usr/sbin/brightness is missing the
+        app still blanks the picture, which is the old behaviour.
+        """
+
+        argv = [BACKLIGHT_BIN, str(level)]
+        if getattr(os, "geteuid", lambda: 0)() != 0:
+            argv.insert(0, "sudo")
+        try:
+            subprocess.run(
+                argv,
+                timeout=5,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def _toggle_screen_off(self) -> None:
         self.screen_off = not self.screen_off
+        self._set_backlight(BACKLIGHT_OFF if self.screen_off else BACKLIGHT_ON)
         self._render()
 
     def _header(self, title: str) -> None:
@@ -454,6 +485,9 @@ class RadioApp:
         """
 
         self.running = False
+        if self.screen_off:
+            # Never leave the board with a dark panel when the app is gone.
+            self._set_backlight(BACKLIGHT_ON)
         try:
             self.player.shutdown()
         finally:

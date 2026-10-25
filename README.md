@@ -95,10 +95,17 @@ python3 main.py
 
 按行空板上的 **A 键**可以把屏幕涂黑，再按一次（或触摸屏幕）恢复，**电台会继续播放**。
 
-注意这是“黑屏”而不是“断电息屏”：M10 的 LCD 背光无法从用户态关闭
-（没有 `/sys/class/backlight`，`fb_blank` 返回 EINVAL，Xorg 以 `-dpms` 启动），
-所以背光仍然亮着，只是不再显示内容。适合夜里听电台时降低刺眼程度。
-黑屏期间的状态轮询不会把界面重新画出来。
+**这是真的关背光，不只是把画面涂黑**。板子自带 `/usr/sbin/brightness`，
+往 PWM `pwmchip1/pwm0` 的 `duty_cycle` 写值（范围 0-100），程序息屏时执行
+`brightness 0`、恢复时执行 `brightness 100`。
+
+> 之前一直以为这块板子的背光不可调 —— `/sys/class/backlight` 是空的，
+> `fb_blank` 返回 EINVAL，Xorg 也以 `-dpms` 启动。其实官方走的是 PWM 那条路，
+> 按 backlight 去找永远找不到。手动试：`sudo brightness 0` / `sudo brightness 100`
+> （非 root 要加 sudo）。已在板上实测通过。
+
+如果板子上没有这个脚本（比如刷了第三方系统），程序会静默跳过，退化成只涂黑画面。
+黑屏期间的状态轮询不会把界面重新画出来；**退出程序时如果还在息屏状态，会自动把背光恢复**。
 
 ### 退出程序
 
